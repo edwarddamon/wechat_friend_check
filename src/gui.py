@@ -12,6 +12,7 @@ import os
 import sys
 import queue
 import threading
+import pythoncom
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -148,12 +149,58 @@ class App:
     def _is_running(self):
         return self.bg_thread is not None and self.bg_thread.is_alive()
 
+    def _wrap_com(self, target):
+        """包装 target：子线程进入时 CoInitialize，退出时 CoUninitialize，并捕获异常。"""
+        def wrapped():
+            try:
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
+            try:
+                target()
+            except Exception as e:
+                self._log(f"[线程错误] {type(e).__name__}: {e}", "err")
+            finally:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+        return wrapped
+
+    def _start_light(self, target, status_text):
+        """短任务（显示微信/测试 wxauto4）：独立线程，不占长任务槽位，不拦截其他按钮。"""
+        t = threading.Thread(target=self._wrap_com(target), daemon=True)
+        t.start()
+        self._set_status(status_text)
+
     def _start_bg(self, target, status_text):
+        """长任务（抓名单/跑批/校准）：独占槽位，运行期间禁止再起长任务。"""
         if self._is_running():
-            messagebox.showwarning("提示", "已有任务在跑，请先停止")
+            messagebox.showwarning("提示", "已有长任务在跑，请先停止")
             return
         self.stop_event = threading.Event()
-        self.bg_thread = threading.Thread(target=target, daemon=True)
+
+        def wrapped():
+            me = threading.current_thread()
+            try:
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
+            try:
+                target()
+            except Exception as e:
+                self._log(f"[线程错误] {type(e).__name__}: {e}", "err")
+            finally:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+                # 释放槽位（仅当还指向自己，避免被更新的任务覆盖）
+                if self.bg_thread is me:
+                    self.bg_thread = None
+                self._set_status("就绪")
+
+        self.bg_thread = threading.Thread(target=wrapped, daemon=True)
         self.bg_thread.start()
         self._set_status(status_text)
 
@@ -161,6 +208,26 @@ class App:
         if self.stop_event:
             self.stop_event.set()
             self._set_status("正在停止...")
+
+    def _force_reset(self):
+        """强制放弃卡死的线程引用。旧线程为 daemon，进程退出时自动结束。"""
+        if self._is_running():
+            ans = messagebox.askyesno(
+                "强制重置",
+                "当前还有任务线程在跑（可能卡在 wxauto4 内部）。\n"
+                "强制重置会放弃该线程引用，让你能起新任务。\n"
+                "旧线程会在程序退出时自动结束。\n\n确认重置？")
+            if not ans:
+                return
+        if self.stop_event:
+            try:
+                self.stop_event.set()
+            except Exception:
+                pass
+        self.bg_thread = None
+        self.stop_event = None
+        self._set_status("就绪")
+        self._log("[已强制重置任务状态]", "warn")
 
     # ============ Tab 1: 微信准备 ============
     def _build_tab_prep(self):
@@ -191,21 +258,14 @@ class App:
         ttk.Label(info, text=req, font=("Microsoft YaHei", 9), justify="left").pack(anchor="w")
 
     def act_show_wechat(self):
-        if self._is_running():
-            messagebox.showwarning("提示", "已有任务在跑")
-            return
         log = self.make_logger()
         def task():
             show_wechat_window(log=log)
             self._set_status("就绪")
-        threading.Thread(target=task, daemon=True).start()
+        self._start_light(task, "显示微信...")
 
     def act_test_wxauto4(self):
-        if self._is_running():
-            messagebox.showwarning("提示", "已有任务在跑")
-            return
         log = self.make_logger()
-        self._set_status("测试 wxauto4...")
         def task():
             show_wechat_window(log=log)
             wx = test_wxauto4(log=log)
@@ -215,7 +275,7 @@ class App:
             else:
                 self._set_status("wxauto4 不可用")
                 self._log("[失败] 请按日志提示检查", "err")
-        threading.Thread(target=task, daemon=True).start()
+        self._start_light(task, "测试 wxauto4...")
 
     # ============ Tab 2: 抓名单 ============
     def _build_tab_scrape(self):
@@ -661,6 +721,14 @@ class App:
             "风险: 中-低（已默认低风险模式：限量、长间隔、批间停顿）\n"
             "局限: 不是 100% 零打扰（对方可能看到空气泡）"
         ), font=("Microsoft YaHei", 9), justify="left").pack(anchor="w")
+
+        rescue = ttk.LabelFrame(f, text="应急", padding=12)
+        rescue.pack(fill="x", pady=8)
+        ttk.Label(rescue, text=(
+            "如果点按钮没反应、提示“已有任务在跑”、或 wxauto4 卡死，\n"
+            "点下面按钮强制重置任务状态（不会杀微信进程）。"
+        ), font=("Microsoft YaHei", 9), justify="left").pack(anchor="w", pady=(0, 6))
+        ttk.Button(rescue, text="强制重置任务状态", command=self._force_reset).pack(anchor="w")
 
 
 def main():
