@@ -182,7 +182,14 @@ def run_check(params=None, log=print, progress=None, stop_event=None):
     log("=" * 60)
     log(f"  会话上限: {cfg['SESSION_LIMIT']} | 好友间隔: {cfg['FRIEND_GAP'][0]}-{cfg['FRIEND_GAP'][1]}s | "
         f"批大小: {cfg['BATCH_SIZE']}")
-    log(f"  探测字符: 零宽字符组合（不是 100% 零打扰，对方可能看到空气泡）")
+    probe = cfg["PROBE_CHAR"]
+    if not probe:
+        probe_desc = "空（可能发送失败）"
+    elif not probe.strip():
+        probe_desc = f"零宽/不可见字符（{len(probe)} 个），对方基本看不见"
+    else:
+        probe_desc = f"自定义文字 {probe!r}（⚠️ 会被对方真实看到）"
+    log(f"  发送内容: {probe_desc}")
 
     log("\n[1/5] 加载好友名单...")
     friends = load_friends(log=log)

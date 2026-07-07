@@ -422,6 +422,26 @@ class App:
         ttk.Label(f, text="配置参数后点开始。运行期间请勿动鼠标键盘。",
                   font=("Microsoft YaHei", 9)).pack(anchor="w")
 
+        # 发送内容（探针消息）—— 顶部醒目位置
+        msg_frame = ttk.LabelFrame(f, text="发送内容（探针消息）", padding=12)
+        msg_frame.pack(fill="x", pady=(8, 4))
+        ttk.Label(msg_frame, text="发给每个好友的内容：",
+                  font=("Microsoft YaHei", 9)).pack(anchor="w")
+        entry_row = ttk.Frame(msg_frame)
+        entry_row.pack(fill="x", pady=(4, 4))
+        self.var_probe_msg = tk.StringVar(value=WX_DEFAULTS["PROBE_CHAR"])
+        ttk.Entry(entry_row, textvariable=self.var_probe_msg).pack(side="left", fill="x", expand=True)
+        ttk.Button(entry_row, text="恢复默认零宽字符", command=self._reset_probe_msg).pack(side="left", padx=(8, 0))
+
+        self.probe_msg_desc = tk.StringVar()
+        ttk.Label(msg_frame, textvariable=self.probe_msg_desc,
+                  font=("Microsoft YaHei", 8), foreground="#888").pack(anchor="w")
+        ttk.Label(msg_frame, text="默认是零宽字符（输入框看着空是正常的，对方基本看不见）。"
+                  "改成自定义文字会被对方真实看到，慎用。",
+                  font=("Microsoft YaHei", 8), foreground="#cc6600").pack(anchor="w")
+        self.var_probe_msg.trace_add("write", lambda *a: self._update_probe_msg_desc())
+        self._update_probe_msg_desc()
+
         form = ttk.LabelFrame(f, text="参数配置", padding=12)
         form.pack(fill="x", pady=8)
 
@@ -497,6 +517,19 @@ class App:
         self.pre_check_var = tk.StringVar(value="点击 \"开始检测\" 前会自动检查")
         ttk.Label(pre, textvariable=self.pre_check_var, font=("Microsoft YaHei", 9), justify="left").pack(anchor="w")
 
+    def _reset_probe_msg(self):
+        self.var_probe_msg.set(WX_DEFAULTS["PROBE_CHAR"])
+
+    def _update_probe_msg_desc(self):
+        s = self.var_probe_msg.get()
+        if not s:
+            self.probe_msg_desc.set("当前: 空（微信可能发送失败，不建议）")
+        elif not s.strip():
+            self.probe_msg_desc.set(f"当前: {len(s)} 个不可见字符（零宽/空白，对方基本看不见）")
+        else:
+            show = s if len(s) <= 30 else s[:30] + "…"
+            self.probe_msg_desc.set(f"当前: {show!r}（{len(s)} 字符，⚠️ 会被对方真实看到）")
+
     def _apply_preset(self, name):
         presets = {
             "default": dict(SESSION_LIMIT=80, FRIEND_GAP=(8.0, 15.0), SEND_WAIT=(3.0, 6.0),
@@ -533,7 +566,7 @@ class App:
             "BATCH_PAUSE": (self.var_batch_pause_min.get(), self.var_batch_pause_max.get()),
             "LONG_PAUSE_EVERY": self.var_long_every.get(),
             "LONG_PAUSE": (self.var_long_pause_min.get(), self.var_long_pause_max.get()),
-            "PROBE_CHAR": self.adv_probe_char.get(),
+            "PROBE_CHAR": self.var_probe_msg.get(),
             "DELETED_KEYWORDS": tuple(k.strip() for k in self.adv_deleted_kw.get().split(",") if k.strip()),
             "BLOCKED_KEYWORDS": tuple(k.strip() for k in self.adv_blocked_kw.get().split(",") if k.strip()),
         }
@@ -684,22 +717,19 @@ class App:
         ttk.Label(f, text="一般不用改。仅当默认值不工作时调整。",
                   font=("Microsoft YaHei", 9)).pack(anchor="w")
 
-        box = ttk.LabelFrame(f, text="探测字符与判定关键词", padding=12)
+        box = ttk.LabelFrame(f, text="判定关键词", padding=12)
         box.pack(fill="x", pady=8)
 
-        ttk.Label(box, text="探测字符 (PROBE_CHAR):").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=4)
-        self.adv_probe_char = tk.StringVar(value=WX_DEFAULTS["PROBE_CHAR"])
-        ttk.Entry(box, textvariable=self.adv_probe_char, width=30).grid(row=0, column=1, sticky="w")
-        ttk.Label(box, text="(零宽字符组合，被微信撤回时才需换)",
-                  font=("Microsoft YaHei", 8), foreground="#888").grid(row=0, column=2, sticky="w", padx=8)
-
-        ttk.Label(box, text="deleted 关键词 (逗号分隔):").grid(row=1, column=0, sticky="w", padx=(0, 4), pady=4)
+        ttk.Label(box, text="deleted 关键词 (逗号分隔):").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=4)
         self.adv_deleted_kw = tk.StringVar(value=",".join(WX_DEFAULTS["DELETED_KEYWORDS"]))
-        ttk.Entry(box, textvariable=self.adv_deleted_kw, width=60).grid(row=1, column=1, columnspan=2, sticky="w")
+        ttk.Entry(box, textvariable=self.adv_deleted_kw, width=60).grid(row=0, column=1, sticky="w")
 
-        ttk.Label(box, text="blocked 关键词 (逗号分隔):").grid(row=2, column=0, sticky="w", padx=(0, 4), pady=4)
+        ttk.Label(box, text="blocked 关键词 (逗号分隔):").grid(row=1, column=0, sticky="w", padx=(0, 4), pady=4)
         self.adv_blocked_kw = tk.StringVar(value=",".join(WX_DEFAULTS["BLOCKED_KEYWORDS"]))
-        ttk.Entry(box, textvariable=self.adv_blocked_kw, width=60).grid(row=2, column=1, columnspan=2, sticky="w")
+        ttk.Entry(box, textvariable=self.adv_blocked_kw, width=60).grid(row=1, column=1, sticky="w")
+
+        ttk.Label(box, text="发送内容在「跑检测」Tab 顶部配置，这里不再重复。",
+                  font=("Microsoft YaHei", 8), foreground="#888").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         paths = ttk.LabelFrame(f, text="文件路径", padding=12)
         paths.pack(fill="x", pady=8)
