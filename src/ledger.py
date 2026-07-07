@@ -2,24 +2,24 @@
 """已检测账本：共享读写 + CLI 查看/清空。
 
 作为模块用：
-    from ledger import LEDGER_FILE, LEDGER_FIELDS, load_ledger, append_to_ledger
+    from .ledger import LEDGER_FILE, LEDGER_FIELDS, load_ledger, append_to_ledger
         LEDGER_FILE       Path 对象，output/checked_ledger.csv
         LEDGER_FIELDS     字段列表
         load_ledger()     -> dict[who -> status]   跨会话去重用
         append_to_ledger(rows, session_ts) -> int  追加新增/更新的条数
 
 作为 CLI 用：
-    python ledger.py              统计
-    python ledger.py show         看全部明细
-    python ledger.py clear        清空账本（下次全测）
+    python -m src.ledger              统计
+    python -m src.ledger show         看全部明细
+    python -m src.ledger clear        清空账本
 """
 
 import csv
 import sys
-from pathlib import Path
 from collections import Counter
 
-LEDGER_FILE = Path(__file__).parent / "output" / "checked_ledger.csv"
+from .paths import LEDGER_FILE, OUTPUT_DIR, ensure_dirs
+
 LEDGER_FIELDS = ["who", "status", "check_time", "session_ts"]
 
 
@@ -39,6 +39,7 @@ def load_ledger():
 
 def append_to_ledger(rows, session_ts):
     """把本次结果追加到账本。已存在且状态相同的跳过。返回新增/更新条数。"""
+    ensure_dirs()
     exists = LEDGER_FILE.exists()
     existing = load_ledger() if exists else {}
     new = []
@@ -48,7 +49,6 @@ def append_to_ledger(rows, session_ts):
         new.append({k: r.get(k, "") for k in LEDGER_FIELDS})
     if not new:
         return 0
-    LEDGER_FILE.parent.mkdir(exist_ok=True)
     with open(LEDGER_FILE, "a", encoding="utf-8-sig", newline="") as fp:
         w = csv.DictWriter(fp, fieldnames=LEDGER_FIELDS)
         if not exists:
@@ -71,7 +71,7 @@ def main():
     if cmd == "clear":
         if LEDGER_FILE.exists():
             LEDGER_FILE.unlink()
-            print(f"已清空账本: {LEDGER_FILE}\n下次跑 check.py / wx_check.py 会全部重测。")
+            print(f"已清空账本: {LEDGER_FILE}\n下次跑检测会全部重测。")
         else:
             print("账本不存在。")
         return
@@ -79,7 +79,7 @@ def main():
     rows = _load_all()
     if not rows:
         print(f"账本为空或不存在: {LEDGER_FILE}")
-        print("还没检测过。运行 python check.py 或 python wx_check.py 开始。")
+        print("还没检测过。运行 python -m src.wx_check 开始。")
         return
 
     if cmd == "show":

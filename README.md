@@ -1,6 +1,6 @@
-# 微信好友状态检测
+# 微信好友状态检测  |  客户端 + CLI
 
-用 [wxauto4](https://github.com/cluic/wxauto4) 免费版（UI 自动化）检测微信里**哪些好友把你删除 / 拉黑**，导出清单供手动删除。适合大批量好友（如 3000 人）分多次跑完。
+用 [wxauto4](https://github.com/cluic/wxauto4) 免费版（UI 自动化）检测微信里**哪些好友把你删除 / 拉黑**，导出清单供手动删除。提供 **GUI 客户端**（双击 exe 运行，推荐）和 **CLI**（命令行）两种使用方式。
 
 ---
 
@@ -24,251 +24,232 @@
 | 项 | 要求 |
 |----|------|
 | 操作系统 | Windows 10/11 |
-| Python | 3.9-3.12 |
 | **微信 PC 版本** | **4.1.8.107**（wxauto4 免费版支持上限，再新控件 ID 会变、初始化失败） |
 | 微信状态 | 已登录、主窗口可见（不能最小化到托盘） |
+| Python（仅 CLI/打包时） | 3.9-3.12 |
+
+**使用 GUI 客户端（exe）无需装 Python**；自己跑 CLI 或打包 exe 需装 Python + 依赖。
 
 ---
 
-## 三、程序入口总览
+## 三、两种使用方式
 
-5 个 Python 脚本，按下面的顺序跑。前 3 个一次性准备，后 2 个日常使用。
+### 方式 A：GUI 客户端（推荐，适合终端用户）
 
-| # | 脚本 | 作用 | 何时跑 | 产物 |
-|---|------|------|--------|------|
-| 1 | `show_wechat.py` | 唤起微信主窗口 + 测 wxauto4 能否初始化 | 安装/降级微信后，第一次跑前 | 无（只输出诊断） |
-| 2 | `calibrate.py` | 校准通讯录坐标（2 项） | 一次性，窗口位置固定后 | `coords.json` |
-| 3 | `scrape_friends.py` | OCR 滚动通讯录抓名字 | 一次性，或好友变动后重跑 | `friends.txt` |
-| 4 | **`wx_check.py`** | **主检测**（探测消息法） | 重复跑，直到全部测完 | `output/*.csv` |
-| 5 | `ledger.py` | 查看/清空已检测账本 | 想看进度或重测时 | 无（只输出/删账本） |
+**若已有打包好的 exe**：双击 `微信好友状态检测.exe` 即可。首次启动较慢（解压到临时目录），耐心等 10-30 秒。
 
-**辅助模块**（不要直接跑）：
-- `ocr_utils.py` — OCR 引擎封装（PaddleOCR 优先，Tesseract 备用），被 `scrape_friends.py` 调用
-- `ledger.py` 也可作为模块被 `wx_check.py` 导入，提供账本读写函数
-
----
-
-## 四、完整使用流程
-
-### 准备：安装依赖
+**若没有 exe，从源码启动 GUI**：
 ```bash
 cd C:\Users\chenj\wechat_friend_check
 pip install -r requirements.txt
+python main.py
 ```
-> PaddleOCR 较大（含 paddlepaddle，约几百 MB），中文准确度最高，强烈建议装。装不上会自动退到 Tesseract（需另装 Tesseract-OCR 程序 + chi_sim 中文包）。
 
-### 第 1 步：确认/降级微信到 4.1.8.107
+GUI 有 5 个 Tab 页，按顺序操作：
+1. **微信准备** — 唤起微信窗口、测 wxauto4 能否初始化
+2. **抓名单** — 校准通讯录坐标 + OCR 抓好友名单 → `data/friends.txt`
+3. **跑检测** — 配置参数（或选预设）+ 点开始 + 实时看日志和进度条
+4. **查看结果** — 账本统计 + 各类清单 + 明细表
+5. **高级设置** — 探测字符、关键词、文件路径
+
+### 方式 B：CLI 命令行（适合开发者/自动化）
+
+```bash
+python -m src.show_wechat --test     # 测 wxauto4
+python -m src.calibrate              # 校准坐标（交互式）
+python -m src.scrape_friends         # 抓好友名单
+python -m src.wx_check               # 跑检测
+python -m src.ledger                 # 看账本 / show / clear
+```
+
+---
+
+## 四、GUI 详细操作流程
+
+### 准备：降级微信到 4.1.8.107
 ```powershell
 # 查看当前版本
 Get-Item "C:\edward\file_jieya\Weixin\Weixin.exe" | % VersionInfo ProductVersion
 ```
-如果不是 4.1.8.107（比如更新的 4.1.11），需要降级：
+如果不是 4.1.8.107：
 1. 下载：https://github.com/SiverKing/wechat4.0-windows-versions/releases/download/v4.1.8.107/weixin_4.1.8.107.exe
-2. **完全退出当前微信**（包括托盘图标右键退出，确保所有 `Weixin.exe` 进程关闭）
+2. **完全退出当前微信**（包括托盘图标右键退出）
 3. 运行下载的 exe 覆盖安装
 4. **登录后立刻关掉自动更新**：微信 → 设置 → 通用设置 → 取消"有更新时自动升级"
-   - 否则微信会偷偷升回新版，wxauto4 又用不了
 
-### 第 2 步：测 wxauto4 能否初始化
-```bash
-python show_wechat.py --test
-```
-**预期输出**：
-```
-[找到] hwnd=xxx class='Qt51514QWindowIcon' visible=False iconic=False
-[结果] visible=True is_foreground=True
---- 测试 wxauto4 初始化 ---
-初始化成功，获取到已登录窗口：Edward
-[OK] wxauto4 初始化成功！
-```
-看到 `[OK]` 才能继续。失败常见原因：
-- 微信版本太新（不是 4.1.8.107）
-- 微信主窗口没显示（脚本会自动唤起，但如果微信没登录就唤不出）
-- 没装 wxauto4：`pip install wxauto4`
+### 第 1 步：微信准备
+- 双击启动 GUI → 切到 **「1. 微信准备」** Tab
+- 点 **「唤起微信主窗口」** → 微信窗口从托盘显示出来
+- 点 **「测试 wxauto4 初始化」** → 日志区看到 `[OK] wxauto4 初始化成功` 才能继续
+- 失败常见原因：微信版本不是 4.1.8.107 / 微信没登录 / 主窗口没显示
 
-### 第 3 步：校准通讯录坐标（一次性）
-```bash
-python calibrate.py
-```
-只需校准 2 项：
-1. **通讯录标签** —— 点左侧导航栏"通讯录"图标
-2. **联系人列表区域** —— 在通讯录页框选右侧联系人列表（点左上角 + 右下角）
+### 第 2 步：抓名单
+- 切到 **「2. 抓名单」** Tab
+- **第 1 步：校准通讯录坐标**（一次性）
+  - 点 **「开始校准」** → 弹出提示窗口
+  - 切到微信，按提示点击：
+    - **通讯录标签** —— 左侧导航栏"通讯录"图标
+    - **联系人列表区域** —— 通讯录页右侧列表，点左上角 + 右下角框选
+  - 校准完提示窗口自动关闭，显示"已校准 ✓"
+  - 紧急中断：鼠标甩到屏幕左上角 (0,0)
+- **第 2 步：OCR 抓好友名单**
+  - 点 **「开始抓取」** → 自动滚动通讯录 OCR 抓名字
+  - 实时看日志（每轮新增多少、累计多少）
+  - 完成后显示 `friends.txt: N 个名字`
+  - 点 **「打开 friends.txt」** 人工核对，删掉非人名行（OCR 有噪声）
+- **校准和抓取过程中不要动鼠标键盘**
 
-操作要点：
-- 脚本启动后，每项提示 `选择 [回车=保留 / r=重校 / s=跳过]:`
-- 第一次跑直接按提示在微信里点击目标位置即可
-- 校准结果存 `coords.json`，**以后微信窗口位置别动**
-- 紧急中断：鼠标甩到屏幕左上角 (0,0)
+### 第 3 步：跑检测
+- 切到 **「3. 跑检测」** Tab
+- 配置参数（或点预设按钮一键填充）：
+  - **快速预设**：
+    - `默认(平衡)` — 80 个/会话，间隔 8-15s
+    - `更安全` — 50 个/会话，间隔 15-30s（主号推荐）
+    - `更快` — 150 个/会话，间隔 5-10s（小号才用）
+  - 也可手动调每个数值
+- 点 **「▶ 开始检测」** → 后台线程开跑，进度条 + 实时日志
+- 运行期间**不要动鼠标键盘**（脚本在自动操作微信）
+- 中途停止：点 **「■ 停止」**，已测的会落盘并写入账本
+- 跑完自动跳到「查看结果」Tab
 
-### 第 4 步：抓好友名单
-```bash
-python scrape_friends.py
-```
-自动点通讯录 → 滚动 → OCR 每屏名字 → `friends.txt`。
+### 第 4 步：处理结果
+- 切到 **「4. 查看结果」** Tab
+- 看账本统计（normal/deleted/blocked/uncertain 各多少）
+- 看本次会话清单（各类 CSV 路径）
+- 看全部已测明细表（最近 200 条）
+- 点 **「打开 output 目录」** 找到 CSV 文件
+  - `deleted_*.csv` → 微信手动删除这些人
+  - `blocked_*.csv` → 微信手动删除这些人
+  - `uncertain_*.csv` → 手动转账法复核
+- 点 **「清空账本」** 下次全部重测
 
-**为什么需要这步**：wxauto4 免费版没有 `GetFriendDetails`（拿不到好友列表），只能靠 OCR 抓或手动编辑 `friends.txt`。
-
-**跑完务必人工核对 `friends.txt`**：
-- 删掉明显不是人名的行（单字母、群名、公众号等 OCR 误识别）
-- 确认行数接近你实际好友数（OCR 滚动会有漏）
-- 建议用**备注名**（唯一）而不是昵称（可能重名），避免后面 `wx_check.py` 搜索时匹配错人
-
-### 第 5 步：跑检测（可分多次）
-```bash
-python wx_check.py
-```
-**行为**：
-- 默认每会话限量 80 个（探测法有发消息行为，不要一口气跑太多）
-- 自动跳过账本里已测过的好友
-- 实时落盘，跑一半中断（Ctrl+C）已测的不会丢
-- 跑完导出 `deleted`/`blocked`/`uncertain` 三个清单
-- **续跑**：直接再跑 `python wx_check.py`，自动从剩余的继续
-
-**运行期间**：
-- 不要动鼠标键盘（脚本在自动操作微信）
-- 紧急中断：Ctrl+C，已测的会落盘并写入账本
-
-**预期输出**：
-```
-[1/80] 张三 ... normal
-[2/80] 李四 ... deleted
-      开启了朋友验证... | all_new=...
-[3/80] 王五 ... blocked
-      ...
-  [批间停顿] 已测 20 个，停 60-120s 模拟人类...
-...
-[账本] 新增/更新 80 条 -> output/checked_ledger.csv
-
-[5/5] 统计：
-    normal: 75
-    deleted: 3
-    blocked: 1
-    uncertain: 1
-    本次耗时: 0时18分32秒
-
-deleted 清单: output/deleted_20260707_161500.csv  (3 个)
-blocked 清单: output/blocked_20260707_161500.csv  (1 个)
-uncertain 清单: output/uncertain_20260707_161500.csv  (1 个)
-
-完整结果: output/wx_status_20260707_161500.csv
-
-[续跑] 还剩 2920 个未测。直接再跑 python wx_check.py 自动跳过已测的。
-```
-
-### 第 6 步：处理结果
-```bash
-python ledger.py        # 看已测统计
-python ledger.py show   # 看全部明细
-python ledger.py clear  # 清空账本（下次全测）
-```
-- `output/deleted_*.csv` → 微信手动删除这些人
-- `output/blocked_*.csv` → 微信手动删除这些人
-- `output/uncertain_*.csv` → 手动转账法复核（少量，几百个里可能就几十个）
+### 第 5 步：续跑
+- 直接再点 **「▶ 开始检测」**，自动跳过账本里已测的好友
+- 3000 人建议分 30-40 次会话跑完，跨几天
 
 ---
 
-## 五、配置项详解
+## 五、程序入口总览
 
-所有可调参数都在脚本顶部的 `# 配置区` 注释下，改数值即可。
+| 入口 | 作用 | 何时用 |
+|------|------|--------|
+| `微信好友状态检测.exe` | GUI 客户端 | 终端用户日常使用（双击） |
+| `python main.py` | GUI（源码启动） | 开发调试 / 没打包 exe 时 |
+| `python -m src.wx_check` | CLI 跑检测 | 命令行 / 自动化 |
+| `python -m src.scrape_friends` | CLI 抓名单 | 命令行 |
+| `python -m src.calibrate` | CLI 校准坐标 | 命令行（交互式） |
+| `python -m src.show_wechat --test` | CLI 测 wxauto4 | 排查问题 |
+| `python -m src.ledger [stats\|show\|clear]` | CLI 账本管理 | 命令行 |
+| `python build_exe.py [--full]` | 打包成 exe | 开发者分发时 |
 
-### `wx_check.py` 主检测脚本
+**辅助模块**（不要直接跑）：`ocr_utils.py`、`ledger.py`（也可作为模块被导入）
 
-| 参数 | 默认 | 说明 |
+---
+
+## 六、文件结构
+
+```
+wechat_friend_check/
+├── main.py                # GUI 入口（python main.py 或双击 exe）
+├── build_exe.py           # PyInstaller 打包脚本
+├── requirements.txt
+├── README.md
+├── src/                   # 核心源码包
+│   ├── __init__.py
+│   ├── paths.py           # 统一路径定义（BASE_DIR / data / output）
+│   ├── gui.py             # GUI 客户端（Tkinter + ttk，5 Tab 页）
+│   ├── wx_check.py        # 主检测逻辑（CLI + 可被 GUI 调用）
+│   ├── scrape_friends.py  # 抓好友名单（CLI + 可被 GUI 调用）
+│   ├── calibrate.py       # 校准坐标（CLI + 可被 GUI 调用）
+│   ├── show_wechat.py     # 工具：唤起微信 + 测 wxauto4
+│   ├── ledger.py          # 账本读写 + CLI 查看/清空
+│   └── ocr_utils.py       # 共享 OCR（PaddleOCR/Tesseract）
+├── data/                  # 运行时数据
+│   ├── friends.txt        # 好友名单（scrape_friends 生成或手填）
+│   └── coords.json        # 校准坐标（calibrate 生成）
+└── output/                # 检测结果
+    ├── checked_ledger.csv
+    ├── wx_status_<时间>.csv
+    ├── deleted_<时间>.csv
+    ├── blocked_<时间>.csv
+    └── uncertain_<时间>.csv
+```
+
+---
+
+## 七、打包成 exe（开发者）
+
+```bash
+pip install -r requirements.txt
+python build_exe.py            # 精简版（~150MB，不含 PaddleOCR，推荐）
+# 或
+python build_exe.py --full     # 完整版（~1.5GB，含 PaddleOCR）
+```
+
+输出：`dist/微信好友状态检测.exe`，单文件，双击即可运行。
+
+**精简版 vs 完整版**：
+| | 精简版 | 完整版 |
+|---|--------|--------|
+| 大小 | ~150MB | ~1.5GB |
+| 跑检测 | ✅ | ✅ |
+| 抓好友名单 | ❌（需单独装 PaddleOCR 跑 CLI） | ✅ |
+| 打包稳定性 | 高 | 中（PaddleOCR 打包易出错） |
+
+精简版用户若需抓名单：在装了 Python 的电脑上 `pip install paddleocr paddlepaddle`，跑 `python -m src.scrape_friends` 生成 `data/friends.txt`，再拷到 exe 同目录的 `data/` 下。
+
+---
+
+## 八、配置参数详解（GUI 「跑检测」Tab 可调）
+
+| 参数 | 默认 | 作用 |
 |------|------|------|
-| `PROBE_CHAR` | `"\u2060\u200b\u200c\u200d"` | 探测字符（零宽组合）。如被微信撤回，可换其他不可见 Unicode |
-| `SEND_WAIT` | `(3.0, 6.0)` | 发送后等待系统回执秒数。`uncertain` 多时调大 |
-| `FRIEND_GAP` | `(8.0, 15.0)` | 每个好友间隔秒数。想更安全调到 `(15, 30)` |
-| `BATCH_SIZE` | `20` | 每批数量。每批后停 `BATCH_PAUSE` |
-| `BATCH_PAUSE` | `(60.0, 120.0)` | 批间停顿秒数 |
-| `LONG_PAUSE_EVERY` | `50` | 每测 N 个插一次长停顿 |
-| `LONG_PAUSE` | `(180.0, 300.0)` | 长停顿秒数 |
-| `SESSION_LIMIT` | `80` | 单会话上限。3000 人建议分 30-40 次跑完 |
-| `SHUFFLE` | `True` | 顺序打乱，不按 friends.txt 顺序连续发 |
-| `RECHECK_ALL` | `False` | 设 `True` 忽略账本全部重测 |
-| `DELETED_KEYWORDS` | `(...)` | deleted 判定关键词，可加新文案 |
-| `BLOCKED_KEYWORDS` | `(...)` | blocked 判定关键词 |
-| `WECHAT_WINDOW_TITLE` | `"微信"` | 微信主窗口标题（用于唤起） |
+| 单会话上限 | 80 | 单次最多测多少个 |
+| 好友间隔(秒) | 8~15 | 每个好友之间随机间隔 |
+| 等待回执(秒) | 3~6 | 发送后等系统消息返回。`uncertain` 多时调大 |
+| 批大小 | 20 | 每多少个插批间停顿 |
+| 批间停(秒) | 60~120 | 批间停顿 |
+| 每N个长停 | 50 | 每测 N 个插长停顿 |
+| 长停(秒) | 180~300 | 长停顿 |
+| 顺序打乱 | ✓ | 不按 friends.txt 顺序发，更像人类 |
+| 忽略账本全部重测 | ✗ | 重测已测过的 |
 
-### `scrape_friends.py` 抓名单脚本
-
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `SCROLL_PAUSE` | `1.2` | 每次滚动后等界面渲染秒数 |
-| `MAX_ROUNDS` | `400` | 最多滚动轮数，防死循环 |
-| `STABLE_STOP` | `3` | 连续 N 轮无新名字则停 |
-| `SKIP_NAMES` | `{...}` | 过滤的系统项（新的朋友、群聊、公众号等） |
-
-### `calibrate.py` / `show_wechat.py`
-无重要可调参数，按提示操作即可。
+**高级设置 Tab**：探测字符、deleted/blocked 关键词、文件路径查看。
 
 ---
 
-## 六、输出文件说明
+## 九、封号风险
 
-```
-output/
-├── checked_ledger.csv          # 账本：跨会话去重依据（who, status, check_time, session_ts）
-├── wx_status_<时间>.csv         # 本次完整结果（含 detail 调试字段）
-├── deleted_<时间>.csv           # 已删除你的好友清单
-├── blocked_<时间>.csv           # 已拉黑你的好友清单
-└── uncertain_<时间>.csv         # 待人工复核清单
-```
+**中-低**。风险来源是"短时间内给大量好友发消息"这个行为本身。已通过默认低风险模式缓解：限量 80、间隔 8-15s、批间停 1-2 分钟、每 50 个长停 3-5 分钟、顺序打乱。
 
-**`wx_status_*.csv` 字段**：
-- `who` — 好友名
-- `status` — `normal` / `deleted` / `blocked` / `uncertain` / `error`
-- `detail` — 调试信息（OCR 文本、系统消息内容、错误原因等），排查问题时看这个
-- `check_time` — 检测时间
-- `session_ts` — 本次会话时间戳（用于关联 `wx_status_*.csv` 和账本）
-
-**`checked_ledger.csv` 字段**：`who, status, check_time, session_ts`（和 `wx_status` 类似但没 detail，用于跨会话去重）
+**绝不要把「单会话上限」调到几百一口气跑完**。3000 人建议分 30-40 次会话，跨几天跑完。主号用「更安全」预设。
 
 ---
 
-## 七、封号风险
+## 十、已知局限
 
-**中-低**。风险来源是"短时间内给大量好友发消息"这个行为本身，不是工具。已通过默认低风险模式缓解：
-- 单会话限量 80 个
-- 好友间隔 8-15 秒
-- 每 20 个停 1-2 分钟（批间停顿）
-- 每 50 个停 3-5 分钟（长停顿）
-- 顺序打乱，不按通讯录顺序连续发
-
-**绝不要把 `SESSION_LIMIT` 调到几百一口气跑完**。3000 人建议分 30-40 次会话，跨几天跑完。
+1. **依赖微信版本**：wxauto4 免费版只支持到 4.1.8.107，再新版本初始化失败。
+2. **不是 100% 零打扰**：零宽字符在部分微信版本会显示为空气泡。
+3. **OCR 准确率 ~85-95%**：`scrape_friends.py` 抓名字会有漏/错，跑完务必人工核对 `friends.txt`。
+4. **搜索可能匹配错人**：昵称重复时 `ChatWith` 可能打开错对象。GUI 有 `ChatInfo` 标题核对会降级为 `uncertain`。建议 `friends.txt` 用备注名（唯一）。
+5. **`deleted`/`blocked` 分支未经实战验证**：第一次测出 deleted/blocked 时看日志确认逻辑对不对。
 
 ---
 
-## 八、已知局限（务必读）
-
-1. **依赖微信版本**：wxauto4 免费版只支持到 4.1.8.107，再新的版本控件 ID 会变、初始化失败。
-2. **不是 100% 零打扰**：零宽字符在部分微信版本会显示为空气泡，对方可能看到。
-3. **OCR 准确率 ~85-95%**：`scrape_friends.py` 抓名字会有漏/错，跑完务必人工核对 `friends.txt` 数量是否接近实际好友数。
-4. **搜索可能匹配错人**：昵称重复时 `ChatWith` 可能打开错对象。`wx_check.py` 有 `ChatInfo` 标题核对会降级为 `uncertain`，但不是 100% 可靠。建议 `friends.txt` 用备注名（唯一）。
-5. **`scrape_friends.py` 滚动可能漏名字**：OCR 列表会有漏。
-6. **`deleted`/`blocked` 分支未经实战验证**：如果从未测出过删除/拉黑的好友，关键词匹配逻辑没经过验证。第一次测出 deleted/blocked 时看 `detail` 字段确认逻辑对不对。
-
----
-
-## 九、调试建议
-
-### 第一次跑前
-1. `python show_wechat.py --test` 确认 wxauto4 能初始化
-2. 在 `friends.txt` 里只放 1-2 个已知好友测一下 `wx_check.py`，看 `output/wx_status_*.csv` 的 `detail` 字段，确认能正确读到消息
-
-### 常见问题
+## 十一、调试
 
 | 现象 | 原因 | 解决 |
 |------|------|------|
-| `wxauto4 初始化失败: 未找到已登录的客户端主窗口` | 微信没登录/最小化到托盘 | `python show_wechat.py` 先唤起，或手动打开微信主窗口 |
-| `wxauto4 初始化失败: LookupError: Find Control Timeout` | 微信版本太新 | 降级到 4.1.8.107 |
-| 大量 `uncertain` | `SEND_WAIT` 太短，系统消息还没返回就读了 | 调大 `wx_check.py` 顶部 `SEND_WAIT`，如 `(5.0, 10.0)` |
-| `detail` 里出现"你撤回了一条消息" | 微信把零宽字符消息自动撤回了 | 通常不影响判定（撤回也算"无系统回执"→ normal）。如想避免，换 `PROBE_CHAR` |
-| `friends.txt` 名字明显偏少 | OCR 漏抓，或滚动提前停了 | 调大 `scrape_friends.py` 的 `STABLE_STOP` 和 `MAX_ROUNDS`，重跑 |
-| `detail` 里 `title_mismatch` | 搜索没匹配到对的人（昵称重复/搜不到） | `friends.txt` 改用备注名 |
+| wxauto4 初始化失败 `未找到已登录的客户端主窗口` | 微信没登录/最小化到托盘 | GUI「微信准备」Tab 点「唤起微信主窗口」 |
+| wxauto4 初始化失败 `Find Control Timeout` | 微信版本太新 | 降级到 4.1.8.107 |
+| 大量 `uncertain` | `等待回执`太短 | 调大「等待回执(秒)」到 5~10 |
+| 日志出现"你撤回了一条消息" | 微信把零宽字符消息自动撤回 | 通常不影响判定（撤回也算无系统回执→normal） |
+| `friends.txt` 名字偏少 | OCR 漏抓 | 调大「滚动最大轮数」、调大「连续N轮无新名字停止」重跑 |
+| `title_mismatch` | 搜索没匹配到对的人 | `friends.txt` 改用备注名 |
 
 ---
 
-## 十、如果 PaddleOCR 装不上
+## 十二、如果 PaddleOCR 装不上
 ```bash
 # Tesseract 备用方案（需先装程序）
 # 1. 下载安装 Tesseract-OCR: https://github.com/UB-Mannheim/tesseract/wiki
