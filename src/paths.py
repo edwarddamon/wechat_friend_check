@@ -21,7 +21,6 @@ OUTPUT_DIR = BASE_DIR / "output"
 
 # 数据文件
 FRIENDS_FILE = DATA_DIR / "friends.txt"
-COORDS_FILE = DATA_DIR / "coords.json"
 LEDGER_FILE = OUTPUT_DIR / "checked_ledger.csv"
 
 

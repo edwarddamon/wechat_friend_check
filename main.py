@@ -6,11 +6,11 @@
 
 CLI 用法（在项目根目录）：
     python -m src.show_wechat --test     # 测 wxauto4
-    python -m src.calibrate              # 校准坐标
-    python -m src.scrape_friends         # 抓好友名单
+    python -m src.auto_scrape probe      # 探测联系人控件结构
+    python -m src.auto_scrape            # 自动抓好友名单
     python -m src.wx_check               # 跑检测
     python -m src.ledger [stats|show|clear]  # 账本管理
-    python build_exe.py [--full]         # 打包成 exe
+    python build_exe.py                  # 打包成 exe
 """
 
 import sys

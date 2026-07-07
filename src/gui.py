@@ -17,13 +17,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 
-from .paths import (BASE_DIR, DATA_DIR, OUTPUT_DIR, FRIENDS_FILE, COORDS_FILE,
+from .paths import (BASE_DIR, DATA_DIR, OUTPUT_DIR, FRIENDS_FILE,
                     LEDGER_FILE, ensure_dirs)
 from .wx_check import run_check, test_wxauto4, load_friends, DEFAULTS as WX_DEFAULTS
-from .scrape_friends import run_scrape
-from .calibrate import run_calibrate, load_coords
+from .auto_scrape import probe_contacts, run_scrape, save_friends
 from .ledger import load_ledger, _load_all as load_ledger_rows
-from .ocr_utils import init_ocr
 from .show_wechat import show_wechat_window
 
 
@@ -115,7 +113,6 @@ class App:
         self._poll_log()
 
         self._refresh_friends_count()
-        self._refresh_coords_display()
         self._refresh_ledger_stats()
 
     # ============ 日志 ============
@@ -140,7 +137,16 @@ class App:
         self.log_text.see("end")
 
     def _set_status(self, text):
-        self.status_var.set(f"状态: {text}")
+        """线程安全：子线程调用时自动转发到主线程。"""
+        def _do():
+            self.status_var.set(f"状态: {text}")
+        if threading.current_thread() is threading.main_thread():
+            _do()
+        else:
+            try:
+                self.root.after(0, _do)
+            except Exception:
+                pass
 
     def make_logger(self):
         return GuiLogger(self.log_queue)
@@ -159,7 +165,13 @@ class App:
             try:
                 target()
             except Exception as e:
+                import traceback
                 self._log(f"[线程错误] {type(e).__name__}: {e}", "err")
+                try:
+                    for line in traceback.format_exc().splitlines():
+                        self._log(line, "err")
+                except Exception:
+                    pass
             finally:
                 try:
                     pythoncom.CoUninitialize()
@@ -283,19 +295,13 @@ class App:
         f.pack(fill="both", expand=True)
 
         ttk.Label(f, text="抓好友名单", font=("Microsoft YaHei", 12, "bold")).pack(anchor="w", pady=(0, 8))
-        ttk.Label(f, text="wxauto4 免费版拿不到好友列表，必须靠 OCR 抓通讯录生成 friends.txt。",
+        ttk.Label(f, text="wxauto4 免费版拿不到好友列表，本工具用 SwitchToContact + uiautomation 自动读通讯录生成 friends.txt。",
+                  font=("Microsoft YaHei", 9)).pack(anchor="w")
+        ttk.Label(f, text="两种方式：① 自动抓取（推荐）② 手动粘贴导入（兜底）",
                   font=("Microsoft YaHei", 9)).pack(anchor="w")
 
-        cal = ttk.LabelFrame(f, text="第 1 步: 校准通讯录坐标（一次性）", padding=12)
-        cal.pack(fill="x", pady=8)
-        self.coords_var = tk.StringVar(value="未校准")
-        ttk.Label(cal, textvariable=self.coords_var, font=("Microsoft YaHei", 9)).pack(anchor="w")
-        row = ttk.Frame(cal)
-        row.pack(fill="x", pady=(6, 0))
-        ttk.Button(row, text="开始校准", command=self.act_calibrate).pack(side="left", padx=(0, 8))
-        ttk.Button(row, text="刷新显示", command=self._refresh_coords_display).pack(side="left")
-
-        sc = ttk.LabelFrame(f, text="第 2 步: OCR 抓好友名单", padding=12)
+        # 自动抓取
+        sc = ttk.LabelFrame(f, text="方式 ①: 自动抓取", padding=12)
         sc.pack(fill="x", pady=8)
         self.friends_count_var = tk.StringVar(value="friends.txt: 0 个名字")
         ttk.Label(sc, textvariable=self.friends_count_var, font=("Microsoft YaHei", 9)).pack(anchor="w")
@@ -303,29 +309,35 @@ class App:
         params = ttk.Frame(sc)
         params.pack(fill="x", pady=6)
         ttk.Label(params, text="滚动最大轮数:").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        self.max_rounds_var = tk.IntVar(value=400)
+        self.max_rounds_var = tk.IntVar(value=300)
         ttk.Entry(params, textvariable=self.max_rounds_var, width=8).grid(row=0, column=1, padx=(0, 12))
-        ttk.Label(params, text="连续N轮无新名字停止:").grid(row=0, column=2, sticky="w", padx=(0, 4))
-        self.stable_stop_var = tk.IntVar(value=3)
-        ttk.Entry(params, textvariable=self.stable_stop_var, width=8).grid(row=0, column=3)
+        ttk.Label(params, text="连续N轮无新增停止:").grid(row=0, column=2, sticky="w", padx=(0, 4))
+        self.no_new_stop_var = tk.IntVar(value=15)
+        ttk.Entry(params, textvariable=self.no_new_stop_var, width=8).grid(row=0, column=3)
 
         row2 = ttk.Frame(sc)
         row2.pack(fill="x", pady=(6, 0))
+        ttk.Button(row2, text="探测联系人控件", command=self.act_probe).pack(side="left", padx=(0, 8))
         self.btn_scrape = ttk.Button(row2, text="开始抓取", command=self.act_scrape)
         self.btn_scrape.pack(side="left", padx=(0, 8))
         self.btn_scrape_stop = ttk.Button(row2, text="停止", command=self._stop_bg, state="disabled")
         self.btn_scrape_stop.pack(side="left")
         ttk.Button(row2, text="打开 friends.txt", command=self._open_friends_file).pack(side="left", padx=12)
 
-        ttk.Label(sc, text="⚠️ 抓完请人工核对 friends.txt，删掉非人名行（OCR 有噪声）",
-                  font=("Microsoft YaHei", 9), foreground="#cc6600").pack(anchor="w", pady=(6, 0))
+        ttk.Label(sc, text="首次使用先点「探测联系人控件」看日志，确认能读到昵称再「开始抓取」。",
+                  font=("Microsoft YaHei", 9), foreground="#888").pack(anchor="w", pady=(6, 0))
 
-    def _refresh_coords_display(self):
-        c = load_coords()
-        if "contacts_tab" in c and "contacts_list_region" in c:
-            self.coords_var.set(f"已校准 ✓  contacts_tab={c['contacts_tab']}  list_region={c['contacts_list_region']}")
-        else:
-            self.coords_var.set("未校准（缺 contacts_tab 或 contacts_list_region）")
+        # 手动导入
+        mi = ttk.LabelFrame(f, text="方式 ②: 手动粘贴导入（兜底）", padding=12)
+        mi.pack(fill="both", expand=True, pady=8)
+        ttk.Label(mi, text="每行一个好友昵称，点保存写入 friends.txt（会覆盖原文件）。",
+                  font=("Microsoft YaHei", 9)).pack(anchor="w")
+        self.manual_text = tk.Text(mi, height=6, font=("Microsoft YaHei", 9))
+        self.manual_text.pack(fill="both", expand=True, pady=(4, 6))
+        row3 = ttk.Frame(mi)
+        row3.pack(fill="x")
+        ttk.Button(row3, text="保存到 friends.txt", command=self.act_manual_save).pack(side="left", padx=(0, 8))
+        ttk.Button(row3, text="载入当前 friends.txt", command=self.act_manual_load).pack(side="left")
 
     def _refresh_friends_count(self):
         try:
@@ -337,59 +349,29 @@ class App:
         except Exception as e:
             self.friends_count_var.set(f"读取失败: {e}")
 
-    def act_calibrate(self):
-        if self._is_running():
-            messagebox.showwarning("提示", "已有任务在跑")
-            return
+    def act_probe(self):
         log = self.make_logger()
-        hint = tk.Toplevel(self.root)
-        hint.title("校准中 - 请在微信里点击")
-        hint.geometry("420x140")
-        hint_label = ttk.Label(hint, text="即将开始校准...\n\n请切换到微信窗口，按日志提示点击目标位置",
-                               font=("Microsoft YaHei", 10), justify="center", padding=20)
-        hint_label.pack(fill="both", expand=True)
-        hint.attributes("-topmost", True)
-
-        def update_hint(key, kind, prompt, value=None):
-            def do():
-                if value is not None:
-                    hint_label.config(text=f"已完成: {key}\n{prompt}\n捕获: {value}")
-                else:
-                    hint_label.config(text=f"当前步骤: {key}\n{prompt}\n\n请在微信里点击目标位置")
-            self.root.after(0, do)
-
-        def on_done(coords):
-            def do():
-                hint.destroy()
-                self._refresh_coords_display()
-                self._set_status("就绪")
-                self._log("[OK] 校准完成", "ok")
-            self.root.after(0, do)
-
         def task():
-            self._set_status("校准中（请在微信点击）")
-            run_calibrate(log=log, on_step=update_hint, on_done=on_done)
-
-        self._start_bg(task, "校准中")
+            show_wechat_window(log=log)
+            probe_contacts(log=log)
+            self._set_status("就绪")
+        self._start_light(task, "探测联系人控件...")
 
     def act_scrape(self):
-        if self._is_running():
-            messagebox.showwarning("提示", "已有任务在跑")
-            return
-        coords = load_coords()
-        if "contacts_tab" not in coords or "contacts_list_region" not in coords:
-            messagebox.showwarning("未校准", "请先校准通讯录坐标")
-            return
         log = self.make_logger()
         params = {
-            "MAX_ROUNDS": self.max_rounds_var.get(),
-            "STABLE_STOP": self.stable_stop_var.get(),
+            "max_rounds": self.max_rounds_var.get(),
+            "max_no_new": self.no_new_stop_var.get(),
         }
         self.btn_scrape.config(state="disabled")
         self.btn_scrape_stop.config(state="normal")
 
         def task():
-            run_scrape(params=params, log=log, stop_event=self.stop_event)
+            names = run_scrape(log=log, stop_event=self.stop_event,
+                               max_rounds=params["max_rounds"],
+                               max_no_new=params["max_no_new"])
+            if names:
+                save_friends(names, log=log)
             def done():
                 self.btn_scrape.config(state="normal")
                 self.btn_scrape_stop.config(state="disabled")
@@ -398,6 +380,29 @@ class App:
             self.root.after(0, done)
 
         self._start_bg(task, "抓名单中")
+
+    def act_manual_save(self):
+        text = self.manual_text.get("1.0", "end")
+        names = [l.strip() for l in text.splitlines() if l.strip()]
+        if not names:
+            messagebox.showwarning("提示", "文本框为空")
+            return
+        try:
+            n = save_friends(names, log=self.make_logger())
+            self._refresh_friends_count()
+            messagebox.showinfo("已保存", f"写入 {n} 个好友到 friends.txt")
+        except Exception as e:
+            messagebox.showerror("错误", str(e))
+
+    def act_manual_load(self):
+        try:
+            if FRIENDS_FILE.exists():
+                self.manual_text.delete("1.0", "end")
+                self.manual_text.insert("1.0", FRIENDS_FILE.read_text(encoding="utf-8"))
+            else:
+                messagebox.showinfo("提示", f"{FRIENDS_FILE} 不存在")
+        except Exception as e:
+            messagebox.showerror("错误", str(e))
 
     def _open_friends_file(self):
         try:
@@ -567,10 +572,6 @@ class App:
             self.root.after(0, do)
 
         def task():
-            try:
-                init_ocr()
-            except Exception:
-                pass
             result = run_check(params=params, log=log, progress=progress_cb, stop_event=self.stop_event)
             def done():
                 self.btn_start.config(state="normal")
@@ -704,7 +705,6 @@ class App:
         paths.pack(fill="x", pady=8)
         for i, (label, p) in enumerate([
             ("friends.txt:", FRIENDS_FILE),
-            ("coords.json:", COORDS_FILE),
             ("账本 ledger:", LEDGER_FILE),
             ("data 目录:", DATA_DIR),
             ("output 目录:", OUTPUT_DIR),

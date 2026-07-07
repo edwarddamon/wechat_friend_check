@@ -47,17 +47,17 @@ python main.py
 
 GUI 有 5 个 Tab 页，按顺序操作：
 1. **微信准备** — 唤起微信窗口、测 wxauto4 能否初始化
-2. **抓名单** — 校准通讯录坐标 + OCR 抓好友名单 → `data/friends.txt`
+2. **抓名单** — 自动抓取通讯录（免校准、免 OCR）或手动粘贴导入 → `data/friends.txt`
 3. **跑检测** — 配置参数（或选预设）+ 点开始 + 实时看日志和进度条
 4. **查看结果** — 账本统计 + 各类清单 + 明细表
-5. **高级设置** — 探测字符、关键词、文件路径
+5. **高级设置** — 探测字符、关键词、文件路径、强制重置
 
 ### 方式 B：CLI 命令行（适合开发者/自动化）
 
 ```bash
 python -m src.show_wechat --test     # 测 wxauto4
-python -m src.calibrate              # 校准坐标（交互式）
-python -m src.scrape_friends         # 抓好友名单
+python -m src.auto_scrape probe      # 探测联系人控件结构（调试用）
+python -m src.auto_scrape            # 自动抓好友名单
 python -m src.wx_check               # 跑检测
 python -m src.ledger                 # 看账本 / show / clear
 ```
@@ -84,20 +84,23 @@ Get-Item "C:\edward\file_jieya\Weixin\Weixin.exe" | % VersionInfo ProductVersion
 - 失败常见原因：微信版本不是 4.1.8.107 / 微信没登录 / 主窗口没显示
 
 ### 第 2 步：抓名单
-- 切到 **「2. 抓名单」** Tab
-- **第 1 步：校准通讯录坐标**（一次性）
-  - 点 **「开始校准」** → 弹出提示窗口
-  - 切到微信，按提示点击：
-    - **通讯录标签** —— 左侧导航栏"通讯录"图标
-    - **联系人列表区域** —— 通讯录页右侧列表，点左上角 + 右下角框选
-  - 校准完提示窗口自动关闭，显示"已校准 ✓"
-  - 紧急中断：鼠标甩到屏幕左上角 (0,0)
-- **第 2 步：OCR 抓好友名单**
-  - 点 **「开始抓取」** → 自动滚动通讯录 OCR 抓名字
+- 切到 **「2. 抓名单」** Tab，两种方式任选：
+
+**方式 ①：自动抓取（推荐）**
+- 先点 **「探测联系人控件」** → 日志区打印控件树和列表项 Name 样本
+  - 确认列表项 Name 是好友昵称（不是空、不是 ID）
+  - 如果探测不到带昵称的列表项，说明微信 Qt 自渲染没暴露 Name → 改用方式 ②
+- 再点 **「开始抓取」** → 自动 SwitchToContact 切通讯录 + 滚动读取 + 去重
   - 实时看日志（每轮新增多少、累计多少）
   - 完成后显示 `friends.txt: N 个名字`
-  - 点 **「打开 friends.txt」** 人工核对，删掉非人名行（OCR 有噪声）
-- **校准和抓取过程中不要动鼠标键盘**
+- 抓取过程中**不要动鼠标键盘**
+
+**方式 ②：手动粘贴导入（兜底）**
+- 在文本框每行一个好友昵称
+- 点 **「保存到 friends.txt」** 写入（覆盖原文件）
+- 适合自动抓取失效、或只想测部分好友时
+
+- 点 **「打开 friends.txt」** 可人工核对
 
 ### 第 3 步：跑检测
 - 切到 **「3. 跑检测」** Tab
@@ -136,13 +139,13 @@ Get-Item "C:\edward\file_jieya\Weixin\Weixin.exe" | % VersionInfo ProductVersion
 | `微信好友状态检测.exe` | GUI 客户端 | 终端用户日常使用（双击） |
 | `python main.py` | GUI（源码启动） | 开发调试 / 没打包 exe 时 |
 | `python -m src.wx_check` | CLI 跑检测 | 命令行 / 自动化 |
-| `python -m src.scrape_friends` | CLI 抓名单 | 命令行 |
-| `python -m src.calibrate` | CLI 校准坐标 | 命令行（交互式） |
+| `python -m src.auto_scrape probe` | CLI 探测联系人控件 | 排查抓名单问题 |
+| `python -m src.auto_scrape` | CLI 抓好友名单 | 命令行 |
 | `python -m src.show_wechat --test` | CLI 测 wxauto4 | 排查问题 |
 | `python -m src.ledger [stats\|show\|clear]` | CLI 账本管理 | 命令行 |
-| `python build_exe.py [--full]` | 打包成 exe | 开发者分发时 |
+| `python build_exe.py` | 打包成 exe | 开发者分发时 |
 
-**辅助模块**（不要直接跑）：`ocr_utils.py`、`ledger.py`（也可作为模块被导入）
+**辅助模块**（不要直接跑）：`ledger.py`（也可作为模块被导入）
 
 ---
 
@@ -159,14 +162,12 @@ wechat_friend_check/
 │   ├── paths.py           # 统一路径定义（BASE_DIR / data / output）
 │   ├── gui.py             # GUI 客户端（Tkinter + ttk，5 Tab 页）
 │   ├── wx_check.py        # 主检测逻辑（CLI + 可被 GUI 调用）
-│   ├── scrape_friends.py  # 抓好友名单（CLI + 可被 GUI 调用）
-│   ├── calibrate.py       # 校准坐标（CLI + 可被 GUI 调用）
+│   ├── auto_scrape.py     # 自动抓好友名单（SwitchToContact + uiautomation，免校准）
 │   ├── show_wechat.py     # 工具：唤起微信 + 测 wxauto4
 │   ├── ledger.py          # 账本读写 + CLI 查看/清空
-│   └── ocr_utils.py       # 共享 OCR（PaddleOCR/Tesseract）
+│   └── paths.py           # 统一路径定义
 ├── data/                  # 运行时数据
-│   ├── friends.txt        # 好友名单（scrape_friends 生成或手填）
-│   └── coords.json        # 校准坐标（calibrate 生成）
+│   └── friends.txt        # 好友名单（auto_scrape 生成或手动导入）
 └── output/                # 检测结果
     ├── checked_ledger.csv
     ├── wx_status_<时间>.csv
@@ -181,22 +182,11 @@ wechat_friend_check/
 
 ```bash
 pip install -r requirements.txt
-python build_exe.py            # 精简版（~150MB，不含 PaddleOCR，推荐）
-# 或
-python build_exe.py --full     # 完整版（~1.5GB，含 PaddleOCR）
+python build_exe.py            # ~60-90MB，单文件
 ```
 
 输出：`dist/微信好友状态检测.exe`，单文件，双击即可运行。
-
-**精简版 vs 完整版**：
-| | 精简版 | 完整版 |
-|---|--------|--------|
-| 大小 | ~150MB | ~1.5GB |
-| 跑检测 | ✅ | ✅ |
-| 抓好友名单 | ❌（需单独装 PaddleOCR 跑 CLI） | ✅ |
-| 打包稳定性 | 高 | 中（PaddleOCR 打包易出错） |
-
-精简版用户若需抓名单：在装了 Python 的电脑上 `pip install paddleocr paddlepaddle`，跑 `python -m src.scrape_friends` 生成 `data/friends.txt`，再拷到 exe 同目录的 `data/` 下。
+依赖大幅精简（不再需要 PaddleOCR/Tesseract/pyautogui/pynput），打包稳定且体积小。
 
 ---
 
@@ -230,7 +220,7 @@ python build_exe.py --full     # 完整版（~1.5GB，含 PaddleOCR）
 
 1. **依赖微信版本**：wxauto4 免费版只支持到 4.1.8.107，再新版本初始化失败。
 2. **不是 100% 零打扰**：零宽字符在部分微信版本会显示为空气泡。
-3. **OCR 准确率 ~85-95%**：`scrape_friends.py` 抓名字会有漏/错，跑完务必人工核对 `friends.txt`。
+3. **自动抓取依赖 UIA 可访问性**：微信 4.x (Qt) 自渲染窗口，若 uiautomation 读不到联系人列表项的 Name，自动抓取会失败，需改用「手动导入」。
 4. **搜索可能匹配错人**：昵称重复时 `ChatWith` 可能打开错对象。GUI 有 `ChatInfo` 标题核对会降级为 `uncertain`。建议 `friends.txt` 用备注名（唯一）。
 5. **`deleted`/`blocked` 分支未经实战验证**：第一次测出 deleted/blocked 时看日志确认逻辑对不对。
 
@@ -242,19 +232,9 @@ python build_exe.py --full     # 完整版（~1.5GB，含 PaddleOCR）
 |------|------|------|
 | wxauto4 初始化失败 `未找到已登录的客户端主窗口` | 微信没登录/最小化到托盘 | GUI「微信准备」Tab 点「唤起微信主窗口」 |
 | wxauto4 初始化失败 `Find Control Timeout` | 微信版本太新 | 降级到 4.1.8.107 |
+| wxauto4 初始化失败 `尚未调用 CoInitialize` | 子线程没初始化 COM | 已修复；若仍出现，去「高级设置」点「强制重置任务状态」 |
+| 自动抓取抓到 0 个 | uiautomation 读不到列表项 Name | 看探测日志；改用「手动导入」 |
 | 大量 `uncertain` | `等待回执`太短 | 调大「等待回执(秒)」到 5~10 |
 | 日志出现"你撤回了一条消息" | 微信把零宽字符消息自动撤回 | 通常不影响判定（撤回也算无系统回执→normal） |
-| `friends.txt` 名字偏少 | OCR 漏抓 | 调大「滚动最大轮数」、调大「连续N轮无新名字停止」重跑 |
 | `title_mismatch` | 搜索没匹配到对的人 | `friends.txt` 改用备注名 |
-
----
-
-## 十二、如果 PaddleOCR 装不上
-```bash
-# Tesseract 备用方案（需先装程序）
-# 1. 下载安装 Tesseract-OCR: https://github.com/UB-Mannheim/tesseract/wiki
-# 2. 安装时勾选 Chinese (Simplified) 语言包
-# 3. pip install pytesseract
-# 4. 可能需设置 tesseract.exe 路径:
-#    import pytesseract; pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-```
+| 点按钮提示「已有任务在跑」 | 上个任务线程卡死 | 「高级设置」→「强制重置任务状态」 |

@@ -81,7 +81,7 @@ def test_wxauto4(log=print):
 def load_friends(log=print):
     if not FRIENDS_FILE.exists():
         log(f"[错误] 没找到 {FRIENDS_FILE}")
-        log("    方式1: 用 GUI 抓名单功能 / python -m src.scrape_friends")
+        log("    方式1: 用 GUI「抓名单」自动抓取 / python -m src.auto_scrape")
         log("    方式2: 手动新建 friends.txt，每行一个好友名（备注名优先）")
         return []
     names = []
