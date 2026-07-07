@@ -1,0 +1,14 @@
+# 微信好友状态检测  |  wxauto4 探测消息法
+
+# === 主检测脚本 wx_check.py / show_wechat.py ===
+wxauto4>=4.1            # 微信 4.x UI 自动化（免费版，支持微信 4.1.8.107）
+pywin32>=306            # 把微信主窗口从托盘唤起（win32gui）
+
+# === 好友名单抓取 scrape_friends.py ===
+pyautogui>=0.9.54       # 屏幕截图 + 点击通讯录
+pynput>=1.8             # calibrate.py 监听鼠标点击校准坐标
+pillow>=10.0            # 截图（pyautogui 依赖，显式列出）
+paddleocr>=2.7          # OCR 主后端（中文准，约几百 MB）
+paddlepaddle>=2.6       # PaddleOCR 依赖
+# OCR 备用后端（PaddleOCR 装不上时用，需另装 Tesseract-OCR 程序 + chi_sim 中文包）
+pytesseract>=0.3.10
